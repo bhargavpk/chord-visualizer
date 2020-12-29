@@ -1,11 +1,19 @@
 package chordNode;
 
 import java.rmi.Remote;
+import java.rmi.RemoteException;
 
-interface NodeAbstract extends Remote{
+public interface NodeAbstract extends Remote{
 	
 	//Node methods
-	public void create();
-	void join(int remoteNode);
-	int findSuccessor(int node);	//node and nodeId interchangeably used
+	int getSuccessor() throws RemoteException;
+	int getPredecessor() throws RemoteException;
+	int create() throws Exception;
+	void join(int remoteNode) throws RemoteException;
+	int findSuccessor(int target) throws RemoteException;
+	//Chord software will invoke findSuccessor to insert key:value in a node
+	
+	void notify(int predNode) throws RemoteException;
+	void stabilize() throws RemoteException;
+	void updateFingers() throws RemoteException;
 }
