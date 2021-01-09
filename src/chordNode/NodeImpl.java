@@ -17,6 +17,12 @@ public class NodeImpl implements NodeAbstract{
 	int predecessor = -1;
 	int fingerTableSize = 7;
 	int[] fingerTable = new int[fingerTableSize];
+	int expectedSuccessor = -1;
+	
+	public int getExpectedSuccessor() throws RemoteException
+	{
+		return this.expectedSuccessor;
+	}
 	
 	public int getSuccessor() throws RemoteException
 	{
@@ -28,6 +34,17 @@ public class NodeImpl implements NodeAbstract{
 		return this.predecessor;
 	}
 	
+	public int[] getFingerTable() throws RemoteException
+	{
+		return this.fingerTable;
+	}
+	
+	public void simulate(int virtSuccessor, int virtPredecessor)
+	{
+		this.successor = virtSuccessor;
+		this.predecessor = virtPredecessor;
+	}
+	
 	BigInteger encryptString (String str) throws NoSuchAlgorithmException 
 	{
 		MessageDigest md = MessageDigest.getInstance("SHA-1");
@@ -36,7 +53,7 @@ public class NodeImpl implements NodeAbstract{
 		return ans;
 	}
 	
-	public int create() throws Exception
+	public int create(int nodeIp) throws Exception
 	{
 		//Later chord software to determine nodeId and bind
 		Random random = new Random();
@@ -44,11 +61,14 @@ public class NodeImpl implements NodeAbstract{
 		if(randNum < 0)
 			randNum *= -1;			
 		BigInteger bigNodeId = encryptString(String.valueOf(randNum)).mod(new BigInteger("128"));
+		bigNodeId = new BigInteger(String.valueOf(nodeIp));
 		
 		NodeImpl obj = new NodeImpl();
 		obj.nodeId = bigNodeId.intValue();
 		System.out.println("Creating with nodeId " + obj.nodeId);
 		obj.successor = obj.predecessor = obj.nodeId;
+		for(int i = 0;i < this.fingerTableSize;i++)
+			obj.fingerTable[i] = -1;
 		//bind node stub to registry
 		NodeAbstract stub = (NodeAbstract)UnicastRemoteObject.exportObject(obj, 0);
 		Registry register = LocateRegistry.getRegistry();
@@ -79,24 +99,22 @@ public class NodeImpl implements NodeAbstract{
 	
 	public int findSuccessor(int target) throws RemoteException
 	{
-		
-		//Assuming chord is stabilized
+//		if((this.nodeId == 1)&&(this.nodeId+1 == target))
+//			System.out.println("node: " + this.nodeId + " successor: " + this.successor + " target: " + target);
 		if(target > this.nodeId)
 		{
 			if(this.successor == this.nodeId)	//If it is the only node
-			{
-				this.successor = target;		//If it is the first node to join
 				return this.nodeId;
-			}
 			else if(this.successor > this.nodeId)
 			{
-				if((target > this.nodeId)&&(target <= this.successor))
+				if(target <= this.successor)
+				{
 					return this.successor;
+				}
 			}
 			else
-			{
 				return this.successor;
-			}
+			
 			for(int i = this.fingerTableSize-1;i >= 0;i--)
 			{
 				if(this.fingerTable[i] == -1)
@@ -116,24 +134,20 @@ public class NodeImpl implements NodeAbstract{
 					}
 				}
 			}
-			System.out.println("Value not found!");
 			//Value not found
 			return -1;
 		}
 		else
 		{
 			if(this.predecessor == this.nodeId)		//If it is the only node
-			{
-				this.successor = target;			//If it is the first node to join
 				return this.nodeId;
-			}
 			if(this.predecessor > this.nodeId)
 				return this.nodeId;
-			for(int i = 0;i < this.fingerTableSize;i++)
+			if((this.successor < this.nodeId)&&(target <= this.successor))
+				return this.successor;
+			for(int i = this.fingerTableSize-1;i >= 0;i--)
 			{
-				if(this.fingerTable[i] == -1)
-					continue;
-				if(this.fingerTable[i] < this.nodeId)
+				if(this.fingerTable[i] != -1)
 				{
 					try {
 						
@@ -148,33 +162,100 @@ public class NodeImpl implements NodeAbstract{
 					}
 				}
 			}
-			System.out.println("Value not found!");
 			return -1;
 		}
 	}
 	
 	public void notify(int predNode) throws RemoteException
 	{
+//		System.out.println(this.nodeId + " notified of " + predNode);
 		this.predecessor = predNode;
+	}
+	
+	class StabilizeThread extends Thread
+	{
+		NodeImpl nodeObj;
+		StabilizeThread(NodeImpl obj)
+		{
+			super();
+			this.nodeObj = obj;
+		}
+		public void run()
+		{
+			try
+			{
+				while(true) {
+						
+					if((this.nodeObj.successor == this.nodeObj.nodeId)&&(this.nodeObj.predecessor != this.nodeObj.nodeId))
+						this.nodeObj.successor = this.nodeObj.predecessor;
+//					if(this.nodeObj.successor != this.nodeObj.nodeId)
+//						this.nodeObj.fingerTable[0] = this.nodeObj.successor;
+					Registry register = LocateRegistry.getRegistry();
+					NodeAbstract successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.nodeObj.successor));
+					int predSuccNode = successorSkeleton.getPredecessor();
+					
+					if((predSuccNode > this.nodeObj.nodeId)&&(predSuccNode < this.nodeObj.successor))
+					{
+//						this.nodeObj.fingerTable[0] = predSuccNode;
+						System.out.println("Pred succ!");
+						this.nodeObj.successor = predSuccNode;
+						successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.nodeObj.successor));
+					}
+					if((this.nodeObj.successor < this.nodeObj.nodeId)&&((predSuccNode > this.nodeObj.nodeId)||(predSuccNode < this.nodeObj.successor)))
+					{
+//						this.nodeObj.fingerTable[0] = predSuccNode;
+						System.out.println("Pred succ!");
+						this.nodeObj.successor = predSuccNode;
+						successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.nodeObj.successor));
+					}
+					successorSkeleton.notify(this.nodeObj.nodeId);
+				}
+			}catch(Exception e) {
+				//Errors due to failure of nodes
+				e.printStackTrace();
+			}
+		}
 	}
 	
 	public void stabilize() throws RemoteException
 	{
 		//Should run periodically
 		//Use thread to run indefinitely
-		//Lookup in table to see if node hasnt failed
-		try {
-			
-			Registry register = LocateRegistry.getRegistry();
-			NodeAbstract successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.successor));
-			int predSuccNode = successorSkeleton.getPredecessor();
-			if((predSuccNode > this.nodeId)&&(predSuccNode < this.successor))
-				this.successor = predSuccNode;
-			successorSkeleton.notify(this.nodeId);
-			
-		}catch(Exception e) {
-			//Errors due to failure of nodes
-			e.printStackTrace();
+		//Lookup in table to see if node has'nt failed
+		StabilizeThread thread = new StabilizeThread(this);
+		thread.start();
+	}
+
+	class UpdateFingerThread extends Thread
+	{
+		NodeImpl nodeObj;
+		UpdateFingerThread(NodeImpl nodeObj)
+		{
+			super();
+			this.nodeObj = nodeObj;
+		}
+		public void run()
+		{
+			int next = 0;
+			try
+			{
+				while(true)	
+				{
+					next = next%7;
+//					if(next == 0)
+//						this.nodeObj.expectedSuccessor = this.nodeObj.findSuccessor((this.nodeObj.nodeId + (1<<next))%128);
+//					if((this.nodeObj.nodeId == 1)&&(next == 0))
+//							System.out.println("successor: " + this.nodeObj.successor);
+					this.nodeObj.fingerTable[next] = this.nodeObj.findSuccessor((this.nodeObj.nodeId + (1<<next))%128);
+//					if((next == 0)&&(this.nodeObj.nodeId == 1))
+//						System.out.println("E(succ) = " + this.nodeObj.fingerTable[next]);
+					next++;
+				}
+			}catch(RemoteException e)
+			{
+				//Error due to failure of node
+				e.printStackTrace();
+			}
 		}
 	}
 	
@@ -182,13 +263,8 @@ public class NodeImpl implements NodeAbstract{
 	{
 		//Should run periodically
 		//Use thread to run indefinitely
-		//Lookup in table to see if node hasnt failed
-		int next = 0;
-		while(true)
-		{
-			next = next%7;
-			this.fingerTable[next] = this.findSuccessor((this.nodeId + (1<<next))%128);
-			next++;
-		}
+		//Lookup in table to see if node has'nt failed
+		UpdateFingerThread thread = new UpdateFingerThread(this);
+		thread.start();
 	}
 }
