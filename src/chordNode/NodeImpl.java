@@ -1,13 +1,11 @@
 package chordNode;
 
-import java.util.Random;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.math.BigInteger;
+import java.util.concurrent.Semaphore;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
-import java.rmi.server.UnicastRemoteObject;
+import java.util.HashMap;
+import java.util.Map;
 
 public class NodeImpl implements NodeAbstract{
 	
@@ -16,13 +14,13 @@ public class NodeImpl implements NodeAbstract{
 	int successor = -1;	//To be modified to successor list
 	int predecessor = -1;
 	int fingerTableSize = 7;
-	int[] fingerTable = new int[fingerTableSize];
+	FingerTable fingerTable = new FingerTable(7);
 	int expectedSuccessor = -1;
+	HashMap<Integer, Integer> dataStore = new HashMap<Integer, Integer>();	//Make a new class to split k-v pairs
+	Semaphore mutex, countLock, dataLock;	//dataLock to be acquired while splitting and merging(in case of failure) data
+	DistributedCount distributedCount;
 	
-	public int getExpectedSuccessor() throws RemoteException
-	{
-		return this.expectedSuccessor;
-	}
+	Boolean notifiedStatus = false;
 	
 	public int getSuccessor() throws RemoteException
 	{
@@ -34,9 +32,9 @@ public class NodeImpl implements NodeAbstract{
 		return this.predecessor;
 	}
 	
-	public int[] getFingerTable() throws RemoteException
+	public int getExpectedSuccessor() throws RemoteException
 	{
-		return this.fingerTable;
+		return this.fingerTable.get(0);
 	}
 	
 	public void simulate(int virtSuccessor, int virtPredecessor)
@@ -45,38 +43,16 @@ public class NodeImpl implements NodeAbstract{
 		this.predecessor = virtPredecessor;
 	}
 	
-	BigInteger encryptString (String str) throws NoSuchAlgorithmException 
-	{
-		MessageDigest md = MessageDigest.getInstance("SHA-1");
-		byte[] messageDigest = md.digest(str.getBytes());
-		BigInteger ans = new BigInteger(1,messageDigest);
-		return ans;
-	}
-	
-	public int create(int nodeIp) throws Exception
+	public void create(int nodeIp, DistributedCount disCount, Semaphore countLock, Semaphore dataLock, Semaphore mutex) throws Exception
 	{
 		//Later chord software to determine nodeId and bind
-		Random random = new Random();
-		int randNum = random.nextInt();
-		if(randNum < 0)
-			randNum *= -1;			
-		BigInteger bigNodeId = encryptString(String.valueOf(randNum)).mod(new BigInteger("128"));
-		bigNodeId = new BigInteger(String.valueOf(nodeIp));
-		
-		NodeImpl obj = new NodeImpl();
-		obj.nodeId = bigNodeId.intValue();
-		System.out.println("Creating with nodeId " + obj.nodeId);
-		obj.successor = obj.predecessor = obj.nodeId;
-		for(int i = 0;i < this.fingerTableSize;i++)
-			obj.fingerTable[i] = -1;
-		//bind node stub to registry
-		NodeAbstract stub = (NodeAbstract)UnicastRemoteObject.exportObject(obj, 0);
-		Registry register = LocateRegistry.getRegistry();
-		register.bind(String.valueOf(obj.nodeId), stub);
-			
-		System.out.println("Create done!");
-		
-		return bigNodeId.intValue();
+		this.nodeId = nodeIp;
+		this.successor = this.predecessor = this.nodeId;
+		this.distributedCount = disCount;
+		this.countLock = countLock;
+		this.dataLock = dataLock;
+		this.mutex = mutex;
+		System.out.println("Creation of node " + this.nodeId + " done!");
 	}
 	
 	public void join(int remoteNode) throws RemoteException	//Invoked by chord software
@@ -87,6 +63,7 @@ public class NodeImpl implements NodeAbstract{
 			Registry register = LocateRegistry.getRegistry();
 			NodeAbstract skeleton = (NodeAbstract)register.lookup(String.valueOf(remoteNode));
 			this.successor = skeleton.findSuccessor(this.nodeId);
+			System.out.println("Successor of node " + this.nodeId + ": " + this.successor);
 			
 		}catch(Exception e) {
 			
@@ -99,8 +76,6 @@ public class NodeImpl implements NodeAbstract{
 	
 	public int findSuccessor(int target) throws RemoteException
 	{
-//		if((this.nodeId == 1)&&(this.nodeId+1 == target))
-//			System.out.println("node: " + this.nodeId + " successor: " + this.successor + " target: " + target);
 		if(target > this.nodeId)
 		{
 			if(this.successor == this.nodeId)	//If it is the only node
@@ -117,14 +92,14 @@ public class NodeImpl implements NodeAbstract{
 			
 			for(int i = this.fingerTableSize-1;i >= 0;i--)
 			{
-				if(this.fingerTable[i] == -1)
+				if(this.fingerTable.get(i) == -1)
 					continue;
-				if((this.fingerTable[i] > this.nodeId)&&(this.fingerTable[i] < target))
+				if((this.fingerTable.get(i) > this.nodeId)&&(this.fingerTable.get(i) < target))
 				{
 					try {
 						
 						Registry register = LocateRegistry.getRegistry();
-						NodeAbstract skeleton = (NodeAbstract)register.lookup(String.valueOf(this.fingerTable[i]));
+						NodeAbstract skeleton = (NodeAbstract)register.lookup(String.valueOf(this.fingerTable.get(i)));
 						return skeleton.findSuccessor(target);
 						
 					}catch(Exception e) {
@@ -134,8 +109,8 @@ public class NodeImpl implements NodeAbstract{
 					}
 				}
 			}
-			//Value not found
-			return -1;
+			//FingerTable not updated yet
+			return this.successor != this.nodeId?this.successor:-1;
 		}
 		else
 		{
@@ -147,12 +122,12 @@ public class NodeImpl implements NodeAbstract{
 				return this.successor;
 			for(int i = this.fingerTableSize-1;i >= 0;i--)
 			{
-				if(this.fingerTable[i] != -1)
+				if(this.fingerTable.get(i) != -1)
 				{
 					try {
 						
 						Registry register = LocateRegistry.getRegistry(null);
-						NodeAbstract skeleton = (NodeAbstract)register.lookup(String.valueOf(this.fingerTable[i]));
+						NodeAbstract skeleton = (NodeAbstract)register.lookup(String.valueOf(this.fingerTable.get(i)));
 						return skeleton.findSuccessor(target);
 						
 					}catch(Exception e) {
@@ -162,14 +137,37 @@ public class NodeImpl implements NodeAbstract{
 					}
 				}
 			}
-			return -1;
+			return this.successor != this.nodeId?this.successor:-1;
 		}
 	}
 	
 	public void notify(int predNode) throws RemoteException
 	{
-//		System.out.println(this.nodeId + " notified of " + predNode);
+		Boolean shouldUpdateFingers = false;
+		if((this.predecessor == this.nodeId)&&(this.successor != this.nodeId))
+			shouldUpdateFingers = true;
 		this.predecessor = predNode;
+		if(shouldUpdateFingers)
+			this.updateFingers();
+		if((this.notifiedStatus == false)&&(this.successor != this.nodeId))
+		{
+			this.notifiedStatus = true;
+			System.out.println("Stabilization of node " + this.nodeId + " done!");
+			try {
+				Registry register = LocateRegistry.getRegistry();
+				NodeAbstract successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.successor));
+				this.dataLock.acquire();
+					this.dataStore = successorSkeleton.getHashMapWithKey(this.nodeId);
+				this.dataLock.release();
+				if(this.nodeId == 35)
+					System.out.println("Other side!");
+				this.distributedCount.decrementCount();
+				
+			}catch(Exception e)
+			{
+				e.printStackTrace();
+			}
+		}
 	}
 	
 	class StabilizeThread extends Thread
@@ -187,23 +185,23 @@ public class NodeImpl implements NodeAbstract{
 				while(true) {
 						
 					if((this.nodeObj.successor == this.nodeObj.nodeId)&&(this.nodeObj.predecessor != this.nodeObj.nodeId))
+					{
 						this.nodeObj.successor = this.nodeObj.predecessor;
-//					if(this.nodeObj.successor != this.nodeObj.nodeId)
-//						this.nodeObj.fingerTable[0] = this.nodeObj.successor;
+						this.nodeObj.updateFingers();
+					}
+					
 					Registry register = LocateRegistry.getRegistry();
 					NodeAbstract successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.nodeObj.successor));
+					
 					int predSuccNode = successorSkeleton.getPredecessor();
 					
 					if((predSuccNode > this.nodeObj.nodeId)&&(predSuccNode < this.nodeObj.successor))
 					{
-//						this.nodeObj.fingerTable[0] = predSuccNode;
-						System.out.println("Pred succ!");
 						this.nodeObj.successor = predSuccNode;
 						successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.nodeObj.successor));
 					}
 					if((this.nodeObj.successor < this.nodeObj.nodeId)&&((predSuccNode > this.nodeObj.nodeId)||(predSuccNode < this.nodeObj.successor)))
 					{
-//						this.nodeObj.fingerTable[0] = predSuccNode;
 						System.out.println("Pred succ!");
 						this.nodeObj.successor = predSuccNode;
 						successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.nodeObj.successor));
@@ -242,13 +240,7 @@ public class NodeImpl implements NodeAbstract{
 				while(true)	
 				{
 					next = next%7;
-//					if(next == 0)
-//						this.nodeObj.expectedSuccessor = this.nodeObj.findSuccessor((this.nodeObj.nodeId + (1<<next))%128);
-//					if((this.nodeObj.nodeId == 1)&&(next == 0))
-//							System.out.println("successor: " + this.nodeObj.successor);
-					this.nodeObj.fingerTable[next] = this.nodeObj.findSuccessor((this.nodeObj.nodeId + (1<<next))%128);
-//					if((next == 0)&&(this.nodeObj.nodeId == 1))
-//						System.out.println("E(succ) = " + this.nodeObj.fingerTable[next]);
+					this.nodeObj.fingerTable.set(next, this.nodeObj.findSuccessor((this.nodeObj.nodeId + (1<<next))%128));
 					next++;
 				}
 			}catch(RemoteException e)
@@ -266,5 +258,39 @@ public class NodeImpl implements NodeAbstract{
 		//Lookup in table to see if node has'nt failed
 		UpdateFingerThread thread = new UpdateFingerThread(this);
 		thread.start();
+	}
+	
+	public void storeData(int key, int value) throws RemoteException
+	{
+		//Use SHA to avoid collisions
+		this.dataStore.put(key,value);
+	}
+	
+	public int getData(int key) throws RemoteException
+	{
+		return this.dataStore.get(key);
+	}
+	
+	public HashMap<Integer, Integer> getHashMapWithKey(int key) throws RemoteException
+	{
+		HashMap<Integer, Integer> dataStoreNew = new HashMap<Integer, Integer>();
+		for(Map.Entry<Integer, Integer> mapEle:this.dataStore.entrySet())
+		{
+			if(key < this.nodeId)
+			{
+				if(!((mapEle.getKey() > key)&&(mapEle.getKey() <= this.nodeId)))
+					dataStoreNew.put(mapEle.getKey(), mapEle.getValue());
+			}
+			else
+			{
+				if(!((mapEle.getKey() > key)||(mapEle.getKey() <= this.nodeId)))
+					dataStoreNew.put(mapEle.getKey(), mapEle.getValue());
+			}
+		}
+		for(Map.Entry<Integer, Integer> mapEle:dataStoreNew.entrySet())
+		{
+			this.dataStore.remove(mapEle.getKey());
+		}
+		return dataStoreNew;
 	}
 }

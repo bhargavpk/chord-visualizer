@@ -19,10 +19,15 @@ class FingerTable {
 		this.fingerTable = new int[tableSize];
 		Arrays.fill(this.fingerTable, -1);	//Later filled by stabilization
 	}
-
-	public static void main(String[] args) {
-		// TODO Auto-generated method stub
-		
+	int get(int index)
+	{
+		if((index >= 0)&&(index < this.size))
+			return this.fingerTable[index];
+		return -1;
+	}
+	void set(int index,int value)
+	{
+		this.fingerTable[index] = value;
 	}
 
 }
