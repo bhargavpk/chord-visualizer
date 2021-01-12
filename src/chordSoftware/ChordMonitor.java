@@ -37,28 +37,58 @@ public class ChordMonitor {
 		return ans;
 	}
 	
+	class CreateNodeThread extends Thread
+	{
+		ChordMonitor parentObj;
+		int nodeId;
+		CreateNodeThread(ChordMonitor obj, int nodeId)
+		{
+			this.parentObj = obj;
+			this.nodeId = nodeId;
+		}
+		public void run()
+		{
+			try
+			{	
+				this.parentObj.readWriteMutex.acquire();
+					if(this.parentObj.distributedCount.count != 0)
+					{
+						this.parentObj.stabilizationLock.acquire();
+						this.parentObj.stabilizationLock.release();	//To restore state of chord after stabilization
+					}
+					NodeImpl obj = new NodeImpl();
+					
+					//bind node stub to registry
+					NodeAbstract stub = (NodeAbstract)UnicastRemoteObject.exportObject(obj, 0);
+					Registry register = LocateRegistry.getRegistry();
+					register.bind(String.valueOf(nodeId), stub);
+					
+					obj.create(nodeId, this.parentObj.distributedCount, this.parentObj.stabilizationLock, this.parentObj.dataLock, this.parentObj.mutex);
+					int randRemoteNodeId = this.parentObj.nodeList.getRandomNode();
+					if(randRemoteNodeId != -1)
+						this.parentObj.distributedCount.incrementCount();
+					this.parentObj.nodeList.addNode(nodeId);	
+					
+					//join node with the chord
+					if(randRemoteNodeId != -1)
+						obj.join(randRemoteNodeId);
+					obj.stabilize();
+				this.parentObj.readWriteMutex.release();
+				
+			}catch(Exception e)
+			{
+				e.printStackTrace();
+			}
+		}
+	}
+	
 	void createNode(int nodeId) throws Exception
 	{
 		//Create node and stabilize it
 		//Create a thread later to create a node
-		
-		NodeImpl obj = new NodeImpl();
-		
-		//bind node stub to registry
-		NodeAbstract stub = (NodeAbstract)UnicastRemoteObject.exportObject(obj, 0);
-		Registry register = LocateRegistry.getRegistry();
-		register.bind(String.valueOf(nodeId), stub);
-		
-		obj.create(nodeId, this.distributedCount, this.stabilizationLock, this.dataLock, this.mutex);
-		this.distributedCount.incrementCount();
-		this.nodeList.addNode(nodeId);
-		
-		//join node with the chord
-		int randRemoteNodeId = this.nodeList.getRandomNode(nodeId);
-		System.out.println("Rand node index: " + randRemoteNodeId);
-		if(randRemoteNodeId != -1)
-			obj.join(randRemoteNodeId);
-		obj.stabilize();
+		//Can wrap method under readWriteMutex to ensure stabilization before creation
+		CreateNodeThread thread = new CreateNodeThread(this, nodeId);
+		thread.start();
 		
 	}
 	
@@ -77,7 +107,10 @@ public class ChordMonitor {
 		{
 			try {
 					if(this.parentObj.distributedCount.count != 0)
+					{
 						this.parentObj.stabilizationLock.acquire();
+						this.parentObj.stabilizationLock.release();	//To restore state of chord after stabilization
+					}
 					Registry register = LocateRegistry.getRegistry();
 					int randomNodeId = this.parentObj.nodeList.getRandomNode();
 					NodeAbstract remoteNode = (NodeAbstract)register.lookup(String.valueOf(randomNodeId));
@@ -129,16 +162,17 @@ public class ChordMonitor {
 		void makeGetRequest()
 		{
 			try {
-					System.out.println("Count: " + this.parentObj.distributedCount.count);
+
 					if(this.parentObj.distributedCount.count != 0)
+					{
 						this.parentObj.stabilizationLock.acquire();
+						this.parentObj.stabilizationLock.release();	//To restore state of chord after stabilization
+					}
 					this.parentObj.dataLock.acquire();
 						Registry register = LocateRegistry.getRegistry();
 						int randomNodeId = this.parentObj.nodeList.getRandomNode();
-						System.out.println("Remote node for finding: " + randomNodeId);
 						NodeAbstract remoteNode = (NodeAbstract)register.lookup(String.valueOf(randomNodeId));
 						int successorKey = remoteNode.findSuccessor(key);
-						System.out.println("Node for key " + key + " is " + successorKey);
 						NodeAbstract successorNode = (NodeAbstract)register.lookup(String.valueOf(successorKey));
 						int value = successorNode.getData(key);
 						System.out.println("Value for key " + key + " is " + value);
@@ -182,13 +216,14 @@ public class ChordMonitor {
 		try {
 			for(int i = 0;i < nodeIdArr.length; i++)
 				chord.createNode(nodeIdArr[i]);
-			chord.addData(43, 3);
-			
-//			Thread.sleep(1000);
+
+			chord.addData(4, 3);
 			
 			chord.createNode(45);
 			
-			chord.getData(43);
+			chord.getData(4);
+			chord.addData(2, 5);
+			chord.getData(2);
 			
 		}catch(Exception e)
 		{

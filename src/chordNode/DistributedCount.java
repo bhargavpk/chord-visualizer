@@ -31,7 +31,6 @@ public class DistributedCount {
 			try
 			{
 				this.distObj.mutex.acquire();
-				System.out.println("Mutex acquired!");
 					this.distObj.count = this.distObj.count + 1;
 					if(this.distObj.count == 1)
 						this.distObj.countLock.acquire();

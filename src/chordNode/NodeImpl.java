@@ -52,18 +52,15 @@ public class NodeImpl implements NodeAbstract{
 		this.countLock = countLock;
 		this.dataLock = dataLock;
 		this.mutex = mutex;
-		System.out.println("Creation of node " + this.nodeId + " done!");
 	}
 	
 	public void join(int remoteNode) throws RemoteException	//Invoked by chord software
 	{
 		try {
 			
-			System.out.println("join, Node " + this.nodeId + " Remote: " + remoteNode);
 			Registry register = LocateRegistry.getRegistry();
 			NodeAbstract skeleton = (NodeAbstract)register.lookup(String.valueOf(remoteNode));
 			this.successor = skeleton.findSuccessor(this.nodeId);
-			System.out.println("Successor of node " + this.nodeId + ": " + this.successor);
 			
 		}catch(Exception e) {
 			
@@ -110,7 +107,7 @@ public class NodeImpl implements NodeAbstract{
 				}
 			}
 			//FingerTable not updated yet
-			return this.successor != this.nodeId?this.successor:-1;
+			return this.successor;
 		}
 		else
 		{
@@ -137,7 +134,7 @@ public class NodeImpl implements NodeAbstract{
 					}
 				}
 			}
-			return this.successor != this.nodeId?this.successor:-1;
+			return this.successor;
 		}
 	}
 	
@@ -146,21 +143,20 @@ public class NodeImpl implements NodeAbstract{
 		Boolean shouldUpdateFingers = false;
 		if((this.predecessor == this.nodeId)&&(this.successor != this.nodeId))
 			shouldUpdateFingers = true;
+		if((this.predecessor == this.nodeId)&&(this.successor == this.nodeId))	//If it is the first node
+			this.notifiedStatus = true;
 		this.predecessor = predNode;
 		if(shouldUpdateFingers)
 			this.updateFingers();
 		if((this.notifiedStatus == false)&&(this.successor != this.nodeId))
 		{
 			this.notifiedStatus = true;
-			System.out.println("Stabilization of node " + this.nodeId + " done!");
 			try {
 				Registry register = LocateRegistry.getRegistry();
 				NodeAbstract successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.successor));
 				this.dataLock.acquire();
 					this.dataStore = successorSkeleton.getHashMapWithKey(this.nodeId);
 				this.dataLock.release();
-				if(this.nodeId == 35)
-					System.out.println("Other side!");
 				this.distributedCount.decrementCount();
 				
 			}catch(Exception e)
@@ -186,6 +182,7 @@ public class NodeImpl implements NodeAbstract{
 						
 					if((this.nodeObj.successor == this.nodeObj.nodeId)&&(this.nodeObj.predecessor != this.nodeObj.nodeId))
 					{
+						this.nodeObj.notifiedStatus = true;	//If it was the first node to join
 						this.nodeObj.successor = this.nodeObj.predecessor;
 						this.nodeObj.updateFingers();
 					}
@@ -202,7 +199,6 @@ public class NodeImpl implements NodeAbstract{
 					}
 					if((this.nodeObj.successor < this.nodeObj.nodeId)&&((predSuccNode > this.nodeObj.nodeId)||(predSuccNode < this.nodeObj.successor)))
 					{
-						System.out.println("Pred succ!");
 						this.nodeObj.successor = predSuccNode;
 						successorSkeleton = (NodeAbstract)register.lookup(String.valueOf(this.nodeObj.successor));
 					}

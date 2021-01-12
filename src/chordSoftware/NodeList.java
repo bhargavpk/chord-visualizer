@@ -39,15 +39,5 @@ class NodeList {
 		int randIndex = random.nextInt(size);
 		return this.nodeList.get(randIndex);
 	}
-	int getRandomNode(int nodeId)
-	{
-		int size = this.nodeList.size();
-		if(size == 1)
-			return -1;
-		Random random = new Random();
-		int randIndex = random.nextInt(size-1);
-		if(randIndex >= nodeId)
-			randIndex++;
-		return this.nodeList.get(randIndex);
-	}
+
 }
